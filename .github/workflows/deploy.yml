@@ -78,7 +78,7 @@ jobs:
             "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Sql/servers/azure-deploy-sql/firewallRules/AllowAzureServices"
 
           import_if_missing "azurerm_service_plan.main" \
-            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Web/serverfarms/azure-deploy-plan"
+            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Web/serverFarms/azure-deploy-plan"
 
           import_if_missing "azurerm_windows_web_app.main" \
             "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Web/sites/azure-deploy-webapp"
