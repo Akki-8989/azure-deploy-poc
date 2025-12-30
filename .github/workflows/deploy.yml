@@ -16,10 +16,21 @@ on:
         required: true
         type: string
 
+env:
+  TF_VAR_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+  TF_VAR_client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+  TF_VAR_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+  TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  TF_VAR_sql_admin_password: ${{ github.event.inputs.sql_admin_password }}
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
 jobs:
   terraform:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -33,44 +44,65 @@ jobs:
         working-directory: ./terraform
         run: terraform init
 
+      - name: Import Existing Resources (if needed)
+        if: github.event.inputs.action == 'apply'
+        working-directory: ./terraform
+        run: |
+          SUBSCRIPTION_ID="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          RG_NAME="azure-deploy-rg"
+
+          # Function to import resource if not in state
+          import_if_missing() {
+            RESOURCE_ADDR=$1
+            RESOURCE_ID=$2
+
+            if ! terraform state show "$RESOURCE_ADDR" > /dev/null 2>&1; then
+              echo "Importing $RESOURCE_ADDR..."
+              terraform import "$RESOURCE_ADDR" "$RESOURCE_ID" || echo "Import failed or resource doesn't exist in Azure"
+            else
+              echo "$RESOURCE_ADDR already in state"
+            fi
+          }
+
+          # Import resources in order (dependencies first)
+          import_if_missing "azurerm_resource_group.main" \
+            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}"
+
+          import_if_missing "azurerm_mssql_server.main" \
+            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Sql/servers/azure-deploy-sql"
+
+          import_if_missing "azurerm_mssql_database.main" \
+            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Sql/servers/azure-deploy-sql/databases/azure-deploy-db"
+
+          import_if_missing "azurerm_mssql_firewall_rule.allow_azure" \
+            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Sql/servers/azure-deploy-sql/firewallRules/AllowAzureServices"
+
+          import_if_missing "azurerm_service_plan.main" \
+            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Web/serverfarms/azure-deploy-plan"
+
+          import_if_missing "azurerm_windows_web_app.main" \
+            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Web/sites/azure-deploy-webapp"
+
       - name: Terraform Plan
         if: github.event.inputs.action == 'plan'
         working-directory: ./terraform
-        run: |
-          terraform plan \
-            -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-            -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
-            -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-            -var="sql_admin_password=${{ github.event.inputs.sql_admin_password }}"
+        run: terraform plan
 
       - name: Terraform Apply
         if: github.event.inputs.action == 'apply'
         working-directory: ./terraform
-        run: |
-          terraform apply -auto-approve \
-            -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-            -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
-            -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-            -var="sql_admin_password=${{ github.event.inputs.sql_admin_password }}"
+        run: terraform apply -auto-approve
 
       - name: Terraform Destroy
         if: github.event.inputs.action == 'destroy'
         working-directory: ./terraform
-        run: |
-          terraform destroy -auto-approve \
-            -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-            -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
-            -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-            -var="sql_admin_password=${{ github.event.inputs.sql_admin_password }}"
+        run: terraform destroy -auto-approve
 
   deploy:
     runs-on: ubuntu-latest
     needs: terraform
     if: github.event.inputs.action == 'apply'
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
