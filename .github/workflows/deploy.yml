@@ -1,133 +1,146 @@
-name: Terraform and Deploy
+name: Deploy to Azure
 
 on:
   workflow_dispatch:
-    inputs:
-      action:
-        description: 'Action to perform'
-        required: true
-        type: choice
-        options:
-          - plan
-          - apply
-          - destroy
-      sql_admin_password:
-        description: 'SQL Admin Password'
-        required: true
-        type: string
 
 env:
-  TF_VAR_client_id: ${{ secrets.AZURE_CLIENT_ID }}
-  TF_VAR_client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-  TF_VAR_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
-  TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-  TF_VAR_sql_admin_password: ${{ github.event.inputs.sql_admin_password }}
-  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-  ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  DOTNET_VERSION: '8.0.x'
+  TF_VERSION: '1.6.0'
 
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    outputs:
+      webapp_name: ${{ steps.tf_output.outputs.webapp_name }}
+      webapp_url: ${{ steps.tf_output.outputs.webapp_url }}
+      sql_connection_string: ${{ steps.tf_output.outputs.sql_connection_string }}
+      sql_created: ${{ steps.tf_output.outputs.sql_created }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.6.0
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+        terraform_wrapper: false
 
-      - name: Terraform Init
-        working-directory: ./terraform
-        run: terraform init
-
-      - name: Import Existing Resources (if needed)
-        if: github.event.inputs.action == 'apply'
-        working-directory: ./terraform
-        run: |
-          SUBSCRIPTION_ID="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-          RG_NAME="azure-deploy-rg"
-
-          # Function to import resource if not in state
-          import_if_missing() {
-            RESOURCE_ADDR=$1
-            RESOURCE_ID=$2
-
-            if ! terraform state show "$RESOURCE_ADDR" > /dev/null 2>&1; then
-              echo "Importing $RESOURCE_ADDR..."
-              terraform import "$RESOURCE_ADDR" "$RESOURCE_ID" || echo "Import failed or resource doesn't exist in Azure"
-            else
-              echo "$RESOURCE_ADDR already in state"
-            fi
+    - name: Azure Login
+      uses: azure/login@v2
+      with:
+        creds: |
+          {
+            "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+            "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+            "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+            "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
           }
 
-          # Import resources in order (dependencies first)
-          import_if_missing "azurerm_resource_group.main" \
-            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}"
+    - name: Terraform Init
+      working-directory: ./infrastructure
+      run: terraform init
 
-          import_if_missing "azurerm_mssql_server.main" \
-            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Sql/servers/azure-deploy-sql"
+    - name: Terraform Plan & Apply
+      working-directory: ./infrastructure
+      run: |
+        # Check if SQL_ADMIN_PASSWORD secret exists and is not empty
+        if [ -n "${{ secrets.SQL_ADMIN_PASSWORD }}" ]; then
+          echo "SQL Admin Password provided - SQL Server will be created"
+          terraform plan -out=tfplan \
+            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            -var="sql_admin_password=${{ secrets.SQL_ADMIN_PASSWORD }}" \
+            -var="create_sql_server=true"
+        else
+          echo "SQL Admin Password not provided - SQL Server will NOT be created"
+          terraform plan -out=tfplan \
+            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            -var="sql_admin_password=" \
+            -var="create_sql_server=false"
+        fi
+        terraform apply -auto-approve tfplan
 
-          import_if_missing "azurerm_mssql_database.main" \
-            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Sql/servers/azure-deploy-sql/databases/azure-deploy-db"
+    - name: Get Terraform Outputs
+      id: tf_output
+      working-directory: ./infrastructure
+      run: |
+        echo "webapp_name=$(terraform output -raw webapp_name)" >> $GITHUB_OUTPUT
+        echo "webapp_url=$(terraform output -raw webapp_url)" >> $GITHUB_OUTPUT
+        SQL_CREATED=$(terraform output -raw sql_created 2>/dev/null || echo "false")
+        echo "sql_created=$SQL_CREATED" >> $GITHUB_OUTPUT
+        if [ "$SQL_CREATED" == "true" ]; then
+          echo "sql_connection_string=$(terraform output -raw sql_connection_string)" >> $GITHUB_OUTPUT
+        fi
 
-          import_if_missing "azurerm_mssql_firewall_rule.allow_azure" \
-            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Sql/servers/azure-deploy-sql/firewallRules/AllowAzureServices"
+  build:
+    runs-on: ubuntu-latest
+    needs: terraform
 
-          import_if_missing "azurerm_service_plan.main" \
-            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Web/serverFarms/azure-deploy-plan"
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-          import_if_missing "azurerm_windows_web_app.main" \
-            "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}/providers/Microsoft.Web/sites/azure-deploy-webapp"
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Terraform Plan
-        if: github.event.inputs.action == 'plan'
-        working-directory: ./terraform
-        run: terraform plan
+    - name: Restore, Build & Publish
+      run: |
+        dotnet restore
+        dotnet build --configuration Release --no-restore
+        dotnet publish --configuration Release --output ./publish --no-build
 
-      - name: Terraform Apply
-        if: github.event.inputs.action == 'apply'
-        working-directory: ./terraform
-        run: terraform apply -auto-approve
-
-      - name: Terraform Destroy
-        if: github.event.inputs.action == 'destroy'
-        working-directory: ./terraform
-        run: terraform destroy -auto-approve
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: webapp-artifact
+        path: ./publish
 
   deploy:
     runs-on: ubuntu-latest
-    needs: terraform
-    if: github.event.inputs.action == 'apply'
+    needs: [terraform, build]
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: webapp-artifact
+        path: ./publish
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
+    - name: Azure Login
+      uses: azure/login@v2
+      with:
+        creds: |
+          {
+            "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+            "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+            "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+            "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+          }
 
-      - name: Restore dependencies
-        run: dotnet restore
+    - name: Deploy to Azure Web App
+      uses: azure/webapps-deploy@v3
+      with:
+        app-name: ${{ needs.terraform.outputs.webapp_name }}
+        package: ./publish
 
-      - name: Build
-        run: dotnet build --configuration Release --no-restore
+    - name: Update Connection String (if SQL created)
+      if: needs.terraform.outputs.sql_created == 'true'
+      run: |
+        az webapp config connection-string set \
+          --name ${{ needs.terraform.outputs.webapp_name }} \
+          --resource-group ${{ needs.terraform.outputs.webapp_name }}-rg \
+          --connection-string-type SQLAzure \
+          --settings DefaultConnection="${{ needs.terraform.outputs.sql_connection_string }}"
 
-      - name: Publish
-        run: dotnet publish -c Release -o ./publish
-
-      - name: Login to Azure
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v2
-        with:
-          app-name: 'azure-deploy-webapp'
-          package: ./publish
+    - name: Deployment Summary
+      run: |
+        echo "## Deployment Complete! 🚀" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Web App URL:** ${{ needs.terraform.outputs.webapp_url }}" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ needs.terraform.outputs.sql_created }}" == "true" ]; then
+          echo "**SQL Server:** Created ✅" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "**SQL Server:** Not created (no password provided)" >> $GITHUB_STEP_SUMMARY
+        fi
