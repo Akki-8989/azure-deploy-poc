@@ -15,6 +15,7 @@ jobs:
       webapp_url: ${{ steps.tf_output.outputs.webapp_url }}
       sql_connection_string: ${{ steps.tf_output.outputs.sql_connection_string }}
       sql_created: ${{ steps.tf_output.outputs.sql_created }}
+      resource_group: ${{ steps.tf_output.outputs.resource_group }}
 
     steps:
     - name: Checkout code
@@ -44,17 +45,18 @@ jobs:
     - name: Terraform Plan & Apply
       working-directory: ./terraform
       run: |
-        # Check if SQL_ADMIN_PASSWORD secret exists and is not empty
         if [ -n "${{ secrets.SQL_ADMIN_PASSWORD }}" ]; then
           echo "SQL Admin Password provided - SQL Server will be created"
           terraform plan -out=tfplan \
             -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            -var="app_name=${{ github.event.repository.name }}" \
             -var="sql_admin_password=${{ secrets.SQL_ADMIN_PASSWORD }}" \
             -var="create_sql_server=true"
         else
           echo "SQL Admin Password not provided - SQL Server will NOT be created"
           terraform plan -out=tfplan \
             -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            -var="app_name=${{ github.event.repository.name }}" \
             -var="sql_admin_password=" \
             -var="create_sql_server=false"
         fi
@@ -66,6 +68,7 @@ jobs:
       run: |
         echo "webapp_name=$(terraform output -raw webapp_name)" >> $GITHUB_OUTPUT
         echo "webapp_url=$(terraform output -raw webapp_url)" >> $GITHUB_OUTPUT
+        echo "resource_group=$(terraform output -raw resource_group)" >> $GITHUB_OUTPUT
         SQL_CREATED=$(terraform output -raw sql_created 2>/dev/null || echo "false")
         echo "sql_created=$SQL_CREATED" >> $GITHUB_OUTPUT
         if [ "$SQL_CREATED" == "true" ]; then
@@ -130,17 +133,17 @@ jobs:
       run: |
         az webapp config connection-string set \
           --name ${{ needs.terraform.outputs.webapp_name }} \
-          --resource-group ${{ needs.terraform.outputs.webapp_name }}-rg \
+          --resource-group ${{ needs.terraform.outputs.resource_group }} \
           --connection-string-type SQLAzure \
           --settings DefaultConnection="${{ needs.terraform.outputs.sql_connection_string }}"
 
     - name: Deployment Summary
       run: |
-        echo "## Deployment Complete! 🚀" >> $GITHUB_STEP_SUMMARY
+        echo "## Deployment Complete!" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**Web App URL:** ${{ needs.terraform.outputs.webapp_url }}" >> $GITHUB_STEP_SUMMARY
         if [ "${{ needs.terraform.outputs.sql_created }}" == "true" ]; then
-          echo "**SQL Server:** Created ✅" >> $GITHUB_STEP_SUMMARY
+          echo "**SQL Server:** Created" >> $GITHUB_STEP_SUMMARY
         else
           echo "**SQL Server:** Not created (no password provided)" >> $GITHUB_STEP_SUMMARY
         fi
