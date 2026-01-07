@@ -18,6 +18,11 @@ variable "subscription_id" {
   description = "Azure Subscription ID"
 }
 
+variable "app_name" {
+  type        = string
+  description = "Application name for resource naming"
+}
+
 variable "create_sql_server" {
   type        = bool
   default     = false
@@ -38,8 +43,7 @@ variable "location" {
 
 # Local variables for naming
 locals {
-  repo_name     = lower(replace(basename(path.cwd), ".", "-"))
-  resource_name = "${local.repo_name}"
+  resource_name = lower(replace(var.app_name, ".", "-"))
 }
 
 # Resource Group
@@ -112,11 +116,15 @@ output "webapp_url" {
   value = "https://${azurerm_windows_web_app.main.default_hostname}"
 }
 
+output "resource_group" {
+  value = azurerm_resource_group.main.name
+}
+
 output "sql_created" {
   value = var.create_sql_server
 }
 
 output "sql_connection_string" {
-  value = var.create_sql_server ? "Server=tcp:${azurerm_mssql_server.main[0].fully_qualified_domain_name},1433;Initial Catalog=${azurerm_mssql_database.main[0].name};Persist Security Info=False;User ID=sqladmin;Password=${var.sql_admin_password};MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;" : ""
+  value     = var.create_sql_server ? "Server=tcp:${azurerm_mssql_server.main[0].fully_qualified_domain_name},1433;Initial Catalog=${azurerm_mssql_database.main[0].name};Persist Security Info=False;User ID=sqladmin;Password=${var.sql_admin_password};MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;" : ""
   sensitive = true
 }
