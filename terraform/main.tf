@@ -124,7 +124,12 @@ output "sql_created" {
   value = var.create_sql_server
 }
 
-output "sql_connection_string" {
-  value     = var.create_sql_server ? "Server=tcp:${azurerm_mssql_server.main[0].fully_qualified_domain_name},1433;Initial Catalog=${azurerm_mssql_database.main[0].name};Persist Security Info=False;User ID=sqladmin;Password=${var.sql_admin_password};MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;" : ""
-  sensitive = true
+output "sql_server_fqdn" {
+  description = "SQL Server fully qualified domain name"
+  value       = var.create_sql_server ? azurerm_mssql_server.main[0].fully_qualified_domain_name : ""
+}
+
+output "sql_database_name" {
+  description = "SQL Database name"
+  value       = var.create_sql_server ? azurerm_mssql_database.main[0].name : ""
 }
