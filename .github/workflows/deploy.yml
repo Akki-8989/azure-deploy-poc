@@ -38,11 +38,11 @@ jobs:
           }
 
     - name: Terraform Init
-      working-directory: ./infrastructure
+      working-directory: ./terraform
       run: terraform init
 
     - name: Terraform Plan & Apply
-      working-directory: ./infrastructure
+      working-directory: ./terraform
       run: |
         # Check if SQL_ADMIN_PASSWORD secret exists and is not empty
         if [ -n "${{ secrets.SQL_ADMIN_PASSWORD }}" ]; then
@@ -62,7 +62,7 @@ jobs:
 
     - name: Get Terraform Outputs
       id: tf_output
-      working-directory: ./infrastructure
+      working-directory: ./terraform
       run: |
         echo "webapp_name=$(terraform output -raw webapp_name)" >> $GITHUB_OUTPUT
         echo "webapp_url=$(terraform output -raw webapp_url)" >> $GITHUB_OUTPUT
