@@ -58,7 +58,7 @@ resource "azurerm_windows_web_app" "main" {
   service_plan_id     = azurerm_service_plan.main.id
 
   site_config {
-    always_on = false  # F1 tier doesn't support always_on
+    always_on = false
     application_stack {
       dotnet_version = "v8.0"
     }
@@ -108,9 +108,7 @@ resource "azurerm_mssql_firewall_rule" "allow_azure" {
   start_ip_address = "0.0.0.0"
   end_ip_address   = "0.0.0.0"
 
-  depends_on = [
-    azurerm_mssql_server.main
-  ]
+  depends_on = [azurerm_mssql_server.main]
 }
 
 # Outputs
@@ -126,10 +124,7 @@ output "webapp_url" {
   value = "https://${azurerm_windows_web_app.main.default_hostname}"
 }
 
-output "sql_server_fqdn" {
-  value = local.create_sql_server ? azurerm_mssql_server.main[0].fully_qualified_domain_name : ""
-}
-
-output "sql_database_name" {
-  value = local.create_sql_server ? azurerm_mssql_database.main[0].name : ""
-}
+# Remove SQL outputs completely to avoid sensitive value issues
+# The connection info can be constructed from the naming convention:
+# Server: {app_name}-sqlserver.database.windows.net
+# Database: {app_name}-db
