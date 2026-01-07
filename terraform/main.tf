@@ -38,7 +38,7 @@ variable "sql_admin_password" {
 
 variable "location" {
   type    = string
-  default = "East US"
+  default = "Central India"
 }
 
 # Local variables for naming
@@ -58,7 +58,7 @@ resource "azurerm_service_plan" "main" {
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   os_type             = "Windows"
-  sku_name            = "B1"
+  sku_name            = "F1"
 }
 
 # Web App
