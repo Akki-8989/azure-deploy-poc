@@ -69,6 +69,8 @@ resource "azurerm_windows_web_app" "main" {
   service_plan_id     = azurerm_service_plan.main.id
 
   site_config {
+    always_on = false
+
     application_stack {
       dotnet_version = "v8.0"
     }
