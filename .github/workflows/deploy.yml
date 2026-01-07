@@ -27,7 +27,13 @@ jobs:
     - name: Azure Login
       uses: azure/login@v2
       with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+        creds: |
+          {
+            "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+            "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+            "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+            "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+          }
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
@@ -67,7 +73,6 @@ jobs:
             echo "Terraform apply failed, waiting $RETRY_DELAY seconds before retry..."
             sleep $RETRY_DELAY
             
-            # Re-run plan before retry (state may have changed)
             echo "Re-running terraform plan..."
             if [ -n "${{ secrets.SQL_ADMIN_PASSWORD }}" ]; then
               terraform plan -var="app_name=${{ github.event.repository.name }}" -var="sql_admin_password=${{ secrets.SQL_ADMIN_PASSWORD }}" -out=tfplan
@@ -128,7 +133,13 @@ jobs:
     - name: Azure Login
       uses: azure/login@v2
       with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+        creds: |
+          {
+            "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+            "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+            "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+            "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+          }
 
     - name: Deploy to Azure Web App
       uses: azure/webapps-deploy@v3
