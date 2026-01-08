@@ -29,7 +29,11 @@ variable "sql_admin_password" {
 }
 
 locals {
-  resource_prefix    = replace(lower(var.app_name), ".", "-")
+  resource_prefix = replace(
+    replace(lower(var.app_name), "_", "-"),
+    ".",
+    "-"
+  )
   create_sql_server  = var.sql_admin_password != ""
 }
 
