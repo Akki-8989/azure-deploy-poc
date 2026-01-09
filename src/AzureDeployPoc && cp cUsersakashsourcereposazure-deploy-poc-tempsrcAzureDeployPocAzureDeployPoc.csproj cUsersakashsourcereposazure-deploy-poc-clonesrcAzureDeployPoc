@@ -1,0 +1,12 @@
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+
+app.MapGet("/", () => "Hello from Azure Deploy POC!");
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
+app.MapGet("/api/info", () => Results.Ok(new {
+    app = "Azure Deploy POC",
+    version = "1.0.0",
+    environment = app.Environment.EnvironmentName
+}));
+
+app.Run();
