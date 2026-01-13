@@ -45,6 +45,31 @@ jobs:
       working-directory: ./terraform
       run: terraform init
 
+    - name: Check and Import Existing Resource Group
+      working-directory: ./terraform
+      run: |
+        # Build resource group name (matching Terraform's naming logic)
+        APP_NAME="${{ github.event.repository.name }}"
+        RG_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | tr '_.' '--')-rg
+        
+        echo "Checking if resource group '$RG_NAME' exists..."
+        
+        if az group exists --name "$RG_NAME" | grep -q "true"; then
+          echo "Resource group '$RG_NAME' exists in Azure."
+          
+          # Check if already in Terraform state
+          if terraform state show azurerm_resource_group.main > /dev/null 2>&1; then
+            echo "Resource group already in Terraform state. Skipping import."
+          else
+            echo "Importing resource group into Terraform state..."
+            RG_ID=$(az group show --name "$RG_NAME" --query id -o tsv)
+            terraform import -var="app_name=${{ github.event.repository.name }}" azurerm_resource_group.main "$RG_ID"
+            echo "Import successful."
+          fi
+        else
+          echo "Resource group '$RG_NAME' does not exist. Will be created by Terraform."
+        fi
+
     - name: Terraform Plan
       working-directory: ./terraform
       run: |
@@ -54,34 +79,9 @@ jobs:
           terraform plan -var="app_name=${{ github.event.repository.name }}" -out=tfplan
         fi
 
-    - name: Terraform Apply with Retry
+    - name: Terraform Apply
       working-directory: ./terraform
-      run: |
-        MAX_RETRIES=3
-        RETRY_DELAY=30
-
-        for i in $(seq 1 $MAX_RETRIES); do
-          echo "Attempt $i of $MAX_RETRIES..."
-
-          if terraform apply -auto-approve tfplan; then
-            echo "Terraform apply succeeded on attempt $i"
-            break
-          else
-            if [ $i -eq $MAX_RETRIES ]; then
-              echo "Terraform apply failed after $MAX_RETRIES attempts"
-              exit 1
-            fi
-            echo "Terraform apply failed, waiting $RETRY_DELAY seconds before retry..."
-            sleep $RETRY_DELAY
-
-            echo "Re-running terraform plan..."
-            if [ -n "${{ secrets.SQL_ADMIN_PASSWORD }}" ]; then
-              terraform plan -var="app_name=${{ github.event.repository.name }}" -var="sql_admin_password=${{ secrets.SQL_ADMIN_PASSWORD }}" -out=tfplan
-            else
-              terraform plan -var="app_name=${{ github.event.repository.name }}" -out=tfplan
-            fi
-          fi
-        done
+      run: terraform apply -auto-approve tfplan
 
     - name: Get Terraform Outputs
       id: terraform_output
