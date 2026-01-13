@@ -35,30 +35,42 @@ locals {
     "-"
   )
   create_sql_server  = var.sql_admin_password != ""
+  resource_group_name = "${local.resource_prefix}-rg"
 }
 
-# Resource Group
+# Check if resource group already exists
+data "azurerm_resource_group" "existing" {
+  count = 1
+  name  = local.resource_group_name
+}
+
+# Resource Group - only create if it doesn't exist
 resource "azurerm_resource_group" "main" {
-  name     = "${local.resource_prefix}-rg"
+  count    = length(data.azurerm_resource_group.existing) == 0 ? 1 : 0
+  name     = local.resource_group_name
   location = var.location
+}
+
+locals {
+  # Use existing resource group if found, otherwise use the newly created one
+  rg_name     = try(data.azurerm_resource_group.existing[0].name, azurerm_resource_group.main[0].name)
+  rg_location = try(data.azurerm_resource_group.existing[0].location, azurerm_resource_group.main[0].location)
 }
 
 # App Service Plan
 resource "azurerm_service_plan" "main" {
   name                = "${local.resource_prefix}-plan"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = local.rg_location
+  resource_group_name = local.rg_name
   os_type             = "Windows"
   sku_name            = "F1"
-
-  depends_on = [azurerm_resource_group.main]
 }
 
 # Windows Web App
 resource "azurerm_windows_web_app" "main" {
   name                = "${local.resource_prefix}-webapp"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
+  location            = local.rg_location
+  resource_group_name = local.rg_name
   service_plan_id     = azurerm_service_plan.main.id
 
   site_config {
@@ -71,24 +83,17 @@ resource "azurerm_windows_web_app" "main" {
   app_settings = {
     "ASPNETCORE_ENVIRONMENT" = "Production"
   }
-
-  depends_on = [
-    azurerm_resource_group.main,
-    azurerm_service_plan.main
-  ]
 }
 
 # SQL Server (conditional)
 resource "azurerm_mssql_server" "main" {
   count                        = local.create_sql_server ? 1 : 0
   name                         = "${local.resource_prefix}-sqlserver"
-  resource_group_name          = azurerm_resource_group.main.name
-  location                     = azurerm_resource_group.main.location
+  resource_group_name          = local.rg_name
+  location                     = local.rg_location
   version                      = "12.0"
   administrator_login          = "sqladmin"
   administrator_login_password = var.sql_admin_password
-
-  depends_on = [azurerm_resource_group.main]
 }
 
 # SQL Database (conditional)
@@ -97,11 +102,6 @@ resource "azurerm_mssql_database" "main" {
   name      = "${local.resource_prefix}-db"
   server_id = azurerm_mssql_server.main[0].id
   sku_name  = "Basic"
-
-  depends_on = [
-    azurerm_resource_group.main,
-    azurerm_mssql_server.main
-  ]
 }
 
 # SQL Server Firewall Rule - Allow Azure Services (conditional)
@@ -111,13 +111,11 @@ resource "azurerm_mssql_firewall_rule" "allow_azure" {
   server_id        = azurerm_mssql_server.main[0].id
   start_ip_address = "0.0.0.0"
   end_ip_address   = "0.0.0.0"
-
-  depends_on = [azurerm_mssql_server.main]
 }
 
 # Outputs
 output "resource_group" {
-  value = azurerm_resource_group.main.name
+  value = local.rg_name
 }
 
 output "webapp_name" {
@@ -127,8 +125,3 @@ output "webapp_name" {
 output "webapp_url" {
   value = "https://${azurerm_windows_web_app.main.default_hostname}"
 }
-
-# Remove SQL outputs completely to avoid sensitive value issues
-# The connection info can be constructed from the naming convention:
-# Server: {app_name}-sqlserver.database.windows.net
-# Database: {app_name}-db
