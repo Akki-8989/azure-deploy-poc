@@ -28,50 +28,52 @@ variable "sql_admin_password" {
   sensitive   = true
 }
 
+variable "project_type" {
+  type        = string
+  description = "Type of project: 'backend' for .NET API, 'frontend' for React/Angular/Vue/Static"
+  default     = "backend"
+}
+
 locals {
   resource_prefix = replace(
     replace(lower(var.app_name), "_", "-"),
     ".",
     "-"
   )
-  create_sql_server  = var.sql_admin_password != ""
-  resource_group_name = "${local.resource_prefix}-rg"
+  create_sql_server = var.sql_admin_password != "" && var.project_type == "backend"
+  is_frontend       = var.project_type == "frontend"
+  is_backend        = var.project_type == "backend"
 }
 
-# Check if resource group already exists
-data "azurerm_resource_group" "existing" {
-  count = 1
-  name  = local.resource_group_name
-}
-
-# Resource Group - only create if it doesn't exist
+# Resource Group
 resource "azurerm_resource_group" "main" {
-  count    = length(data.azurerm_resource_group.existing) == 0 ? 1 : 0
-  name     = local.resource_group_name
+  name     = "${local.resource_prefix}-rg"
   location = var.location
 }
 
-locals {
-  # Use existing resource group if found, otherwise use the newly created one
-  rg_name     = try(data.azurerm_resource_group.existing[0].name, azurerm_resource_group.main[0].name)
-  rg_location = try(data.azurerm_resource_group.existing[0].location, azurerm_resource_group.main[0].location)
-}
+# ============================================
+# BACKEND RESOURCES (Windows App Service)
+# ============================================
 
-# App Service Plan
+# App Service Plan for Backend
 resource "azurerm_service_plan" "main" {
+  count               = local.is_backend ? 1 : 0
   name                = "${local.resource_prefix}-plan"
-  location            = local.rg_location
-  resource_group_name = local.rg_name
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
   os_type             = "Windows"
   sku_name            = "F1"
+
+  depends_on = [azurerm_resource_group.main]
 }
 
-# Windows Web App
+# Windows Web App for Backend
 resource "azurerm_windows_web_app" "main" {
+  count               = local.is_backend ? 1 : 0
   name                = "${local.resource_prefix}-webapp"
-  location            = local.rg_location
-  resource_group_name = local.rg_name
-  service_plan_id     = azurerm_service_plan.main.id
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  service_plan_id     = azurerm_service_plan.main[0].id
 
   site_config {
     always_on = false
@@ -83,45 +85,97 @@ resource "azurerm_windows_web_app" "main" {
   app_settings = {
     "ASPNETCORE_ENVIRONMENT" = "Production"
   }
+
+  depends_on = [
+    azurerm_resource_group.main,
+    azurerm_service_plan.main
+  ]
 }
 
-# SQL Server (conditional)
+# SQL Server (conditional - backend only)
 resource "azurerm_mssql_server" "main" {
   count                        = local.create_sql_server ? 1 : 0
   name                         = "${local.resource_prefix}-sqlserver"
-  resource_group_name          = local.rg_name
-  location                     = local.rg_location
+  resource_group_name          = azurerm_resource_group.main.name
+  location                     = azurerm_resource_group.main.location
   version                      = "12.0"
   administrator_login          = "sqladmin"
   administrator_login_password = var.sql_admin_password
+
+  depends_on = [azurerm_resource_group.main]
 }
 
-# SQL Database (conditional)
+# SQL Database (conditional - backend only)
 resource "azurerm_mssql_database" "main" {
   count     = local.create_sql_server ? 1 : 0
   name      = "${local.resource_prefix}-db"
   server_id = azurerm_mssql_server.main[0].id
   sku_name  = "Basic"
+
+  depends_on = [
+    azurerm_resource_group.main,
+    azurerm_mssql_server.main
+  ]
 }
 
-# SQL Server Firewall Rule - Allow Azure Services (conditional)
+# SQL Server Firewall Rule (conditional - backend only)
 resource "azurerm_mssql_firewall_rule" "allow_azure" {
   count            = local.create_sql_server ? 1 : 0
   name             = "AllowAzureServices"
   server_id        = azurerm_mssql_server.main[0].id
   start_ip_address = "0.0.0.0"
   end_ip_address   = "0.0.0.0"
+
+  depends_on = [azurerm_mssql_server.main]
 }
 
-# Outputs
+# ============================================
+# FRONTEND RESOURCES (Static Web App)
+# ============================================
+
+# Azure Static Web App for Frontend
+resource "azurerm_static_web_app" "main" {
+  count               = local.is_frontend ? 1 : 0
+  name                = "${local.resource_prefix}-static"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = "eastasia"
+  sku_tier            = "Free"
+  sku_size            = "Free"
+
+  depends_on = [azurerm_resource_group.main]
+}
+
+# ============================================
+# OUTPUTS
+# ============================================
+
 output "resource_group" {
-  value = local.rg_name
+  value = azurerm_resource_group.main.name
 }
 
+output "project_type" {
+  value = var.project_type
+}
+
+# Backend outputs
 output "webapp_name" {
-  value = azurerm_windows_web_app.main.name
+  value = local.is_backend ? azurerm_windows_web_app.main[0].name : ""
 }
 
 output "webapp_url" {
-  value = "https://${azurerm_windows_web_app.main.default_hostname}"
+  value = local.is_backend ? "https://${azurerm_windows_web_app.main[0].default_hostname}" : ""
+}
+
+# Frontend outputs
+output "static_webapp_name" {
+  value = local.is_frontend ? azurerm_static_web_app.main[0].name : ""
+}
+
+output "static_webapp_url" {
+  value = local.is_frontend ? "https://${azurerm_static_web_app.main[0].default_host_name}" : ""
+}
+
+output "static_webapp_api_key" {
+  value     = local.is_frontend ? azurerm_static_web_app.main[0].api_key : ""
+  sensitive = true
 }
